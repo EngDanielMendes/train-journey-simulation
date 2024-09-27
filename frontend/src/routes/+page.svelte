@@ -1,15 +1,15 @@
 <script>
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import mapboxgl from 'mapbox-gl';
 	import 'mapbox-gl/dist/mapbox-gl.css';
 
 	let map;
 	let marker;
 	let socket;
-	let journeyPath = []; // Initialize an array to store the journey path coordinates
 	let activeSpeed = 1;
-	let isJourneyStarted = false; // Track if the journey has started
-	let isJourneyStopped = false; // Track if the journey is paused/stopped
+	let journeyPath = [];
+	let isJourneyStarted = false;
+	let isJourneyStopped = false; 
 
 	// Initialize Mapbox
 	mapboxgl.accessToken =
@@ -60,28 +60,48 @@
 
 		// Handle location updates
 		socket.onmessage = (event) => {
-			const location = JSON.parse(event.data);
+			try {
+				const data = JSON.parse(event.data);
 
-			// Update marker position
-			marker.setLngLat([location.lng, location.lat]);
-			map.flyTo({ center: [location.lng, location.lat], essential: true });
+				// Check if it's valid location data (contains numbers for lng/lat)
+				if (
+					typeof data.lat === 'number' &&
+					typeof data.lng === 'number' &&
+					!isNaN(data.lat) &&
+					!isNaN(data.lng)
+				) {
+					// It's valid coordinate data, update the marker and path
+					// Update marker position
+					marker.setLngLat([data.lng, data.lat]);
+					map.flyTo({ center: [data.lng, data.lat], essential: true });
 
-			// Update the journey path and map layer
-			journeyPath.push([location.lng, location.lat]); // Add new coordinates to the journey path
-			map.getSource('route').setData({
-				type: 'Feature',
-				properties: {},
-				geometry: {
-					type: 'LineString',
-					coordinates: journeyPath // Update the coordinates in the GeoJSON source
+					// Update the journey path and map layer
+					journeyPath.push([data.lng, data.lat]); // Add new coordinates to the journey path
+					map.getSource('route').setData({
+						type: 'Feature',
+						properties: {},
+						geometry: {
+							type: 'LineString',
+							coordinates: journeyPath // Update the coordinates in the GeoJSON source
+						}
+					});
+				} else {
+					// Handle non-coordinate JSON-RPC responses (optional)
+					console.log('Alert:', data);
 				}
-			});
+			} catch (error) {
+				console.error('Failed to parse Websocket message', error);
+			}
 		};
+
+		window.addEventListener('beforeunload', resetAndCloseSocket);
+
+		onDestroy(() => resetAndCloseSocket());
 	});
 
 	function startJourney(event) {
-		event.preventDefault(); // Prevent default form action if in a form
-		event.stopPropagation(); // Stop the event from bubbling up
+		event.preventDefault(); 
+		event.stopPropagation();
 
 		socket.send(
 			JSON.stringify({
@@ -110,7 +130,6 @@
 			);
 			isJourneyStopped = false;
 		} else {
-			// Stop the journey
 			socket.send(
 				JSON.stringify({
 					jsonrpc: '2.0',
@@ -120,6 +139,43 @@
 			);
 			isJourneyStopped = true;
 		}
+	}
+
+	function resetJourney(event) {
+		event.preventDefault();
+		event.stopPropagation();
+
+		socket.send(
+			JSON.stringify({
+				jsonrpc: '2.0',
+				method: 'resetJourney',
+				id: 4
+			})
+		);
+
+		isJourneyStarted = false;
+		isJourneyStopped = true;
+		console.log({ isJourneyStarted, isJourneyStopped });
+
+		// Move the marker back to the first coordinate and center the map
+		if (journeyPath.length > 0) {
+			console.log({ journeyPath });
+			const firstLocation = journeyPath[0]; // Assuming journeyData is an array of coordinates
+			console.log({ firstLocation });
+			marker.setLngLat([firstLocation[0], firstLocation[1]]);
+			map.flyTo({ center: [firstLocation[0], firstLocation[1]], essential: true });
+		}
+
+		journeyPath = [];
+
+		map.getSource('route').setData({
+			type: 'Feature',
+			properties: {},
+			geometry: {
+				type: 'LineString',
+				coordinates: journeyPath
+			}
+		});
 	}
 
 	function changeSpeed(speed) {
@@ -133,19 +189,41 @@
 			})
 		);
 	}
+
+	// Reset map and close WebSocket connection
+	function resetAndCloseSocket() {
+		if (socket) {
+			socket.send(
+				JSON.stringify({
+					jsonrpc: '2.0',
+					method: 'stopJourney',
+					id: 3
+				})
+			);
+
+			socket.close();
+		}
+
+		resetJourney();
+	}
 </script>
 
 <div>
 	<div class="controls">
-		<label>
-			{#if !isJourneyStarted}
+		{#if !isJourneyStarted}
+			<label>
 				<button on:click={(event) => startJourney(event)}>Start</button>
-			{:else}
+			</label>
+		{:else}
+			<label>
 				<button on:click={(event) => stopOrContinueJourney(event)}>
 					{isJourneyStopped ? 'Continue' : 'Stop'}
 				</button>
-			{/if}
-		</label>
+			</label>
+			<label>
+				<button on:click={(event) => resetJourney(event)}>Reset</button>
+			</label>
+		{/if}
 
 		{#if isJourneyStarted}
 			<label

@@ -8,10 +8,10 @@ const rpcServer = new JSONRPCServer();
 
 let connections = [];
 let journeyData = [];
-let replaySpeed = 1; // Default replay speed
-let delay = 0; // Default delay in seconds
+let replaySpeed = 1; // Default play speed
+let delay = 0; // Default play delay in seconds
 let isJourneyRunning = false;
-let isPaused = false; // New flag for pausing the journey
+let isPaused = false;
 let currentIndex = 0; // Track the current position in the journey
 
 // Parse NMEA file to extract GPS data
@@ -45,9 +45,14 @@ journeyData = parseNMEAFile('./leixoes_campanha.txt');
 // Handle WebSocket connections
 server.on('connection', (ws) => {
   console.log('New client connected');
-  connections.push(ws);
+
+  // Close previous connections
+  connections.forEach((conn) => conn.close());
+  connections = [ws]; // Only store the new connection
+
   ws.on('message', (message) => {
     console.log(`Received message: ${message}`);
+
     const request = JSON.parse(message);
     rpcServer.receive(request).then((response) => {
       if (response) ws.send(JSON.stringify(response));
@@ -77,7 +82,7 @@ rpcServer.addMethod('startJourney', ({ delaySeconds }) => {
     // Only start if the journey isn't already running
     isJourneyRunning = true;
     isPaused = false;
-    currentIndex = 0; // Start from the beginning
+    currentIndex = 0;
     setTimeout(
       () => broadcastLocation(currentIndex),
       delaySeconds * 1000 || delay * 1000
@@ -95,10 +100,17 @@ rpcServer.addMethod('stopJourney', () => {
   return 'Journey is not running or already stopped';
 });
 
+rpcServer.addMethod('resetJourney', () => {
+  isPaused = true;
+  isJourneyRunning = false;
+  currentIndex = 0;
+  return 'Journey reset';
+});
+
 rpcServer.addMethod('continueJourney', () => {
   if (isJourneyRunning && isPaused) {
     isPaused = false;
-    broadcastLocation(currentIndex); // Resume from the current position
+    broadcastLocation(currentIndex);
     return 'Journey resumed';
   }
   return 'Journey is not paused or not running';
